@@ -19,18 +19,11 @@ export class TrilliumClient {
   private apiUrl: string;
   private apiToken: string;
   private verifySsl: boolean;
-  private dispatcher: any;
 
   constructor(config: Config) {
     this.apiToken = config.apiToken;
     this.apiUrl = config.apiUrl.replace(/\/$/, ''); // Remove trailing slash
     this.verifySsl = config.verifySsl;
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { Agent } = require('undici') as typeof import('undici');
-    this.dispatcher = new Agent({
-      keepAliveTimeout: 1,
-      keepAliveMaxTimeout: 1,
-    });
   }
 
   /**
@@ -66,6 +59,7 @@ export class TrilliumClient {
 
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${this.apiToken}`,
+      'Connection': 'close',
     };
 
     // Set Content-Type based on body type
@@ -79,10 +73,9 @@ export class TrilliumClient {
       }
     }
 
-    const options: any = {
+    const options: RequestInit = {
       method,
       headers,
-      dispatcher: this.dispatcher,
     };
 
     if (body !== undefined) {
