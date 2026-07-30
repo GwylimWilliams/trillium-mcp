@@ -28,8 +28,8 @@ export class TrilliumClient {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { Agent } = require('undici') as typeof import('undici');
     this.dispatcher = new Agent({
-      keepAliveTimeout: 0,
-      keepAliveMaxTimeout: 0,
+      keepAliveTimeout: 1,
+      keepAliveMaxTimeout: 1,
     });
   }
 
