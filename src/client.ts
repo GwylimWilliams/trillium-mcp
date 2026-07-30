@@ -19,21 +19,48 @@ export class TrilliumClient {
   private apiUrl: string;
   private apiToken: string;
   private verifySsl: boolean;
+  private dispatcher: any;
 
   constructor(config: Config) {
     this.apiToken = config.apiToken;
     this.apiUrl = config.apiUrl.replace(/\/$/, ''); // Remove trailing slash
     this.verifySsl = config.verifySsl;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { Agent } = require('undici') as typeof import('undici');
+    this.dispatcher = new Agent({
+      keepAliveTimeout: 0,
+      keepAliveMaxTimeout: 0,
+    });
   }
 
   /**
-   * Generic request handler for Trillium ETAPI
+   * Check if an error is a connection-level failure that can be retried.
+   * These occur when Undici picks a dead socket from the connection pool.
+   */
+  private isConnectionError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    const msg = error.message.toLowerCase();
+    return (
+      msg.includes('fetch failed') ||
+      msg.includes('econnreset') ||
+      msg.includes('epipe') ||
+      msg.includes('econnrefused') ||
+      msg.includes('socket') ||
+      error.name === 'TypeError'
+    );
+  }
+
+  /**
+   * Generic request handler for Trillium ETAPI.
+   * Disables keepalive to prevent dead-socket pool rot, adds a timeout,
+   * and retries once on connection-level errors.
    */
   private async request<T>(
     method: string,
     path: string,
     body?: any,
-    isTextResponse = false
+    isTextResponse = false,
+    _retry = true
   ): Promise<T> {
     const url = `${this.apiUrl}${path}`;
 
@@ -52,9 +79,10 @@ export class TrilliumClient {
       }
     }
 
-    const options: RequestInit = {
+    const options: any = {
       method,
       headers,
+      dispatcher: this.dispatcher,
     };
 
     if (body !== undefined) {
@@ -65,8 +93,22 @@ export class TrilliumClient {
     // For self-signed certs, you may need to use NODE_TLS_REJECT_UNAUTHORIZED=0
     // or use a custom agent with undici or https module
 
+    const doFetch = async (signal?: AbortSignal): Promise<Response> => {
+      const opts = { ...options };
+      if (signal) opts.signal = signal;
+      return fetch(url, opts);
+    };
+
     try {
-      const response = await fetch(url, options);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30_000);
+      let response: Response;
+
+      try {
+        response = await doFetch(controller.signal);
+      } finally {
+        clearTimeout(timeout);
+      }
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -87,6 +129,12 @@ export class TrilliumClient {
 
       return (await response.json()) as T;
     } catch (error) {
+      if (_retry && this.isConnectionError(error)) {
+        console.error(`API request connection error, retrying: ${error instanceof Error ? error.message : String(error)}`);
+        await new Promise((r) => setTimeout(r, 100));
+        return this.request<T>(method, path, body, isTextResponse, false);
+      }
+
       if (error instanceof Error) {
         console.error(`API request failed: ${error.message}`);
         throw error;
